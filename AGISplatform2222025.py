@@ -202,18 +202,28 @@ with col_map:
     # Display map and capture drawn polygons
     map_data = st_folium(m, height=500, returned_objects=["all_drawings"], use_container_width=True)
 
-    # Polygon-based statistics only (no pie chart)
-    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-        last_feature = map_data["all_drawings"][-1]
-        drawn_polygon = shape(last_feature["geometry"])
-        if drawn_polygon is not None and points_gdf is not None:
-            pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
-            st.subheader("🟢 Points inside drawn polygon")
-            st.markdown(f"- Total points: {len(pts_in_polygon)}")
-            if not pts_in_polygon.empty:
-                st.dataframe(pts_in_polygon)
+    # Polygon-based statistics (Masculin / Feminin table)
+if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+    last_feature = map_data["all_drawings"][-1]
+    drawn_polygon = shape(last_feature["geometry"])
+    if drawn_polygon is not None and points_gdf is not None:
+        pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
+        st.subheader("🟢 Points inside drawn polygon")
 
-with col_chart:
+        if not pts_in_polygon.empty:
+            m_count = int(pts_in_polygon["Masculin"].sum()) if "Masculin" in pts_in_polygon.columns else 0
+            f_count = int(pts_in_polygon["Feminin"].sum()) if "Feminin" in pts_in_polygon.columns else 0
+            total_count = m_count + f_count
+
+            # Display as a clean table
+            summary_df = pd.DataFrame({
+                "Attribute": ["Masculin", "Feminin", "Total"],
+                "Count": [m_count, f_count, total_count]
+            })
+            st.table(summary_df)
+        else:
+            st.info("No points inside drawn polygon.")
+
     # Existing SE charts remain unchanged
     if idse_selected=="No filter":
         st.info("Select SE.")
@@ -260,3 +270,4 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 ** CAMARA, PhD – Geomatics Engineering** © 2025
 """)
+
