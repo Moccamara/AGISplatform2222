@@ -264,6 +264,7 @@ with col_chart:
 st.markdown("""
 ---
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
-** MOC CAMARA, PhD – Geomatics Engineering** © 2025
+** MOCAMARA CAMARA, PhD – Geomatics Engineering** © 2025
 """)
+
 
