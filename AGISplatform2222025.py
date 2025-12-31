@@ -3,11 +3,13 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import MeasureControl, Draw, MousePosition
+from shapely.geometry import shape, Point, Polygon
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
-from shapely.geometry import shape, Point, Polygon
+from shapely import wkt
 import json
+import os
 
 # =========================================================
 # APP CONFIG
@@ -31,7 +33,7 @@ if "auth_ok" not in st.session_state:
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawings = []
+    st.session_state.drawn_features = []
 
 # =========================================================
 # LOGOUT
@@ -41,8 +43,8 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawings = []
-    st.stop()
+    st.session_state.drawn_features = []
+    st.experimental_rerun()
 
 # =========================================================
 # LOGIN
@@ -51,14 +53,13 @@ if not st.session_state.auth_ok:
     st.sidebar.header("🔐 Login")
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
-
     if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
             st.session_state.username = username
             st.session_state.user_role = USERS[username]["role"]
             st.success("✅ Login successful")
-            st.stop()
+            st.experimental_rerun()
         else:
             st.sidebar.error("❌ Incorrect password")
     st.stop()
@@ -149,18 +150,14 @@ with st.sidebar:
     st.markdown("### 🗂️ Attribute Query")
     region = st.selectbox("Region", sorted(gdf["region"].dropna().unique()))
     gdf_r = gdf[gdf["region"] == region]
-
     cercle = st.selectbox("Cercle", sorted(gdf_r["cercle"].dropna().unique()))
     gdf_c = gdf_r[gdf_r["cercle"] == cercle]
-
     commune = st.selectbox("Commune", sorted(gdf_c["commune"].dropna().unique()))
     gdf_commune = gdf_c[gdf_c["commune"] == commune]
-
     idse_list = ["No filter"] + sorted(gdf_commune["idse_new"].dropna().unique())
     idse_selected = st.selectbox("Unit_Geo", idse_list)
     gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
-    # Spatial Query (Admin only)
     pts_inside_map = None
     if st.session_state.user_role=="Admin":
         st.markdown("### 🛰️ Spatial Query")
@@ -170,12 +167,10 @@ with st.sidebar:
             st.success(f"✅ Spatial query returned {len(pts_inside_map)} points inside selected SE.")
 
 # =========================================================
-# MAP SETUP
+# MAP
 # =========================================================
 minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
-
-# Base layers
 folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -185,7 +180,7 @@ folium.TileLayer(
 ).add_to(m)
 m.fit_bounds([[miny,minx],[maxy,maxx]])
 
-# SE Polygons
+# ===== Overlay layers =====
 fg_idse = folium.FeatureGroup(name="SE Polygons", show=True)
 folium.GeoJson(
     gdf_idse,
@@ -194,7 +189,6 @@ folium.GeoJson(
 ).add_to(fg_idse)
 fg_idse.add_to(m)
 
-# Concession Points
 points_to_plot = pts_inside_map if (st.session_state.user_role=="Admin" and pts_inside_map is not None) else points_gdf
 fg_points = folium.FeatureGroup(name="Concession Points", show=True)
 if points_to_plot is not None:
@@ -211,11 +205,7 @@ fg_points.add_to(m)
 
 # Plugins
 MeasureControl().add_to(m)
-draw_control = Draw(
-    export=True,
-    draw_options={"polyline": False, "rectangle": False, "circle": False, "circlemarker": False},
-    edit_options={"edit": True, "remove": True}
-)
+draw_control = Draw(export=True, draw_options={"polyline": False, "rectangle": False, "circle": False, "circlemarker": False})
 draw_control.add_to(m)
 
 MousePosition(
@@ -234,7 +224,6 @@ folium.LayerControl(collapsed=True).add_to(m)
 # =========================================================
 col_map, col_chart = st.columns((3,1), gap="small")
 with col_map:
-    # Display map and capture drawings
     map_data = st_folium(
         m,
         height=500,
@@ -242,57 +231,69 @@ with col_map:
         use_container_width=True
     )
 
-    # Save drawings persistently
-    if map_data and "all_drawings" in map_data:
-        st.session_state.drawings = map_data["all_drawings"]
-
     # ================================
-    # DYNAMIC MARKER & POLYGON TABLE
+    # Drawn markers table
     # ================================
-    if st.session_state.drawings:
-        markers_list = []
-        polygons_list = []
-        for feature in st.session_state.drawings:
+    markers_list = []
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        for feature in map_data["all_drawings"]:
+            geom_type = feature["geometry"]["type"]
             geom_shape = shape(feature["geometry"])
-            if feature["geometry"]["type"] == "Point":
-                markers_list.append({"Latitude": geom_shape.y, "Longitude": geom_shape.x, "Label": feature.get("properties", {}).get("label","")})
-            elif feature["geometry"]["type"] == "Polygon":
-                polygons_list.append({"Polygon": geom_shape.wkt, "Label": feature.get("properties", {}).get("label","")})
+            if geom_type == "Point":
+                markers_list.append((geom_shape.y, geom_shape.x))
+    if markers_list:
+        markers_df = pd.DataFrame(markers_list, columns=["Latitude","Longitude"])
+        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+        st.dataframe(markers_df)
+        csv = markers_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Marker Coordinates CSV",
+            data=csv,
+            file_name="markers_coordinates.csv",
+            mime="text/csv"
+        )
 
-        if markers_list:
-            st.subheader("📍 Drawn Markers")
-            markers_df = pd.DataFrame(markers_list)
-            edited_markers = st.data_editor(markers_df, num_rows="dynamic")
-            csv = edited_markers.to_csv(index=False)
-            st.download_button("📥 Download Markers CSV", data=csv, file_name="markers.csv", mime="text/csv")
-
-        if polygons_list:
-            st.subheader("🟢 Drawn Polygons")
-            polygons_df = pd.DataFrame(polygons_list)
-            edited_polygons = st.data_editor(polygons_df, num_rows="dynamic")
-            geojson_data = gpd.GeoDataFrame(
-                edited_polygons,
-                geometry=edited_polygons["Polygon"].apply(lambda x: shape({"type":"Polygon","coordinates":json.loads(x.replace('(','[').replace(')',']'))})),
-                crs="EPSG:4326"
-            )
-            geojson_file = geojson_data.to_file("drawn_polygons.geojson", driver="GeoJSON")
-            st.success("✅ Drawn polygons saved to GeoJSON")
-
-    # Polygon-based stats (example)
-    if st.session_state.drawings and points_gdf is not None:
-        for feature in st.session_state.drawings:
-            if feature["geometry"]["type"] == "Polygon":
-                drawn_polygon = shape(feature["geometry"])
-                pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
-                st.markdown(f"### Points inside polygon ({len(pts_in_polygon)} total)")
-                if not pts_in_polygon.empty:
+    # ================================
+    # Polygon-based statistics (KEEP AS-IS)
+    # ================================
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        last_feature = map_data["all_drawings"][-1]
+        drawn_polygon = shape(last_feature["geometry"])
+        if drawn_polygon is not None and points_gdf is not None:
+            pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
+            st.subheader("🟢 Points inside drawn polygon")
+            st.markdown(f"- Total points: {len(pts_in_polygon)}")
+            if not pts_in_polygon.empty:
+                attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
+                if attr_cols:
+                    stats = pts_in_polygon[attr_cols].sum().to_frame().T
+                    stats["Total"] = stats.sum(axis=1)
+                    st.dataframe(stats)
+                else:
                     st.dataframe(pts_in_polygon)
 
+    # ================================
+    # Persist drawn polygons/markers
+    # ================================
+    if map_data and "all_drawings" in map_data:
+        geojson_file = "drawn_features.geojson"
+        features_list = []
+        for f in map_data["all_drawings"]:
+            features_list.append({
+                "type":"Feature",
+                "properties": {"label": f.get("properties", {}).get("label","")},
+                "geometry": f["geometry"]
+            })
+        geojson_data = {"type":"FeatureCollection", "features":features_list}
+        with open(geojson_file, "w") as f:
+            json.dump(geojson_data, f)
+        st.success(f"✅ Drawn features saved to {geojson_file}")
+
 with col_chart:
-    # Population chart
     if idse_selected=="No filter":
         st.info("Select SE.")
     else:
+        # Population bar chart
         st.subheader("📊 Population")
         df_long = gdf_idse[["idse_new","pop_se","pop_se_ct"]].copy()
         df_long["idse_new"] = df_long["idse_new"].astype(str)
