@@ -6,7 +6,7 @@ from folium.plugins import MeasureControl, Draw, MousePosition
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
-from shapely.geometry import shape, Point, Polygon
+from shapely.geometry import shape
 
 # =========================================================
 # APP CONFIG
@@ -175,7 +175,7 @@ minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
 
 # ===== Base layers =====
-folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
+folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     name="Satellite",
@@ -232,6 +232,7 @@ folium.LayerControl(collapsed=True).add_to(m)
 # =========================================================
 col_map, col_chart = st.columns((3,1), gap="small")
 with col_map:
+    # Display map and capture drawn polygons & markers
     map_data = st_folium(
         m,
         height=500,
@@ -239,49 +240,62 @@ with col_map:
         use_container_width=True
     )
 
-  # ================================
-# PROCESS DRAWN GEOMETRIES (POINTS + POLYGONS)
-# ================================
-pts_in_polygon = gpd.GeoDataFrame(columns=points_gdf.columns, crs=points_gdf.crs)
-markers_list = []
+    # ================================
+    # DYNAMIC MARKER TABLE AND CSV
+    # ================================
+    markers_list = []
 
-if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-    for feature in map_data["all_drawings"]:
-        geom_type = feature["geometry"]["type"]
-        geom_shape = shape(feature["geometry"])
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        for feature in map_data["all_drawings"]:
+            geom_type = feature["geometry"]["type"]
+            geom_shape = shape(feature["geometry"])
+            if geom_type == "Point":
+                markers_list.append((geom_shape.y, geom_shape.x))
 
-        if geom_type == "Polygon":
-            pts_poly = points_gdf[points_gdf.geometry.within(geom_shape)]
-            pts_in_polygon = pd.concat([pts_in_polygon, pts_poly], ignore_index=True)
-        elif geom_type == "Point":
-            markers_list.append((geom_shape.y, geom_shape.x))
+    if markers_list:
+        markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
+        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+        st.dataframe(
+            markers_df.style.set_table_styles(
+                [{'selector': 'th', 'props': [('font-size', '10px')]},
+                 {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
+            ),
+            height=200,
+            width=300
+        )
 
-    # Only display stats if user drew at least one geometry
-    if not pts_in_polygon.empty or markers_list:
-        # Display polygon stats
-        if not pts_in_polygon.empty:
-            st.subheader("🟢 Points inside drawn polygon")
-            st.markdown(f"- Total points: {len(pts_in_polygon)}")
-            attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
-            if attr_cols:
-                stats = pts_in_polygon[attr_cols].sum().to_frame().T
-                stats["Total"] = stats.sum(axis=1)
-                st.dataframe(stats)
-            else:
-                st.dataframe(pts_in_polygon)
+        csv = markers_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Marker Coordinates CSV",
+            data=csv,
+            file_name="markers_coordinates.csv",
+            mime="text/csv"
+        )
 
-        # Display markers table
-        if markers_list:
-            markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
-            st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
-            st.dataframe(markers_df)
-            csv = markers_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Marker Coordinates CSV",
-                data=csv,
-                file_name="markers_coordinates.csv",
-                mime="text/csv"
-            )
+    # Polygon-based statistics
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        last_feature = map_data["all_drawings"][-1]
+        drawn_polygon = shape(last_feature["geometry"])
+        if drawn_polygon is not None and points_gdf is not None:
+            pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
+            if len(pts_in_polygon) > 0:
+                st.subheader("🟢 Points inside drawn polygon")
+                st.markdown(f"- Total points: {len(pts_in_polygon)}")
+                attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
+                if attr_cols:
+                    stats = pts_in_polygon[attr_cols].sum().to_frame().T
+                    stats["Total"] = stats.sum(axis=1)
+                    st.dataframe(
+                        stats.style.set_table_styles(
+                            [{'selector': 'th', 'props': [('font-size', '10px')]},
+                             {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
+                        ),
+                        height=100,
+                        width=300
+                    )
+                else:
+                    st.dataframe(pts_in_polygon)
+
 with col_chart:
     # Population bar chart
     if idse_selected=="No filter":
@@ -331,4 +345,3 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
-
