@@ -31,8 +31,6 @@ if "auth_ok" not in st.session_state:
     st.session_state.user_role = None
     st.session_state.points_gdf = None
     st.session_state.pts_inside_map = None
-    st.session_state.drawn_polygons = []
-    st.session_state.drawn_markers = []
 
 # =========================================================
 # LOGOUT
@@ -43,8 +41,6 @@ def logout():
     st.session_state.user_role = None
     st.session_state.points_gdf = None
     st.session_state.pts_inside_map = None
-    st.session_state.drawn_polygons = []
-    st.session_state.drawn_markers = []
     st.rerun()
 
 # =========================================================
@@ -54,6 +50,7 @@ if not st.session_state.auth_ok:
     st.sidebar.header("🔐 Login")
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
+
     if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
@@ -73,10 +70,7 @@ SE_URL = "https://raw.githubusercontent.com/Moccamara/web_mapping/master/data/SE
 @st.cache_data(show_spinner=False)
 def load_se_data(url):
     gdf = gpd.read_file(url)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(epsg=4326)
-    else:
-        gdf = gdf.to_crs(epsg=4326)
+    gdf = gdf.set_crs(epsg=4326) if gdf.crs is None else gdf.to_crs(epsg=4326)
     gdf.columns = gdf.columns.str.lower().str.strip()
     gdf = gdf.rename(columns={"lregion":"region","lcercle":"cercle","lcommune":"commune"})
     gdf = gdf[gdf.is_valid & ~gdf.is_empty]
@@ -127,10 +121,7 @@ else:
 # =========================================================
 def safe_sjoin(points, polygons, how="inner", predicate="intersects"):
     if points is None or points.empty or polygons is None or polygons.empty:
-        return gpd.GeoDataFrame(
-            columns=points.columns if points is not None else [],
-            crs=points.crs if points is not None else None
-        )
+        return gpd.GeoDataFrame(columns=points.columns if points is not None else [], crs=points.crs if points is not None else None)
     for col in ["index_right", "_r"]:
         if col in polygons.columns:
             polygons = polygons.drop(columns=[col])
@@ -148,27 +139,37 @@ with st.sidebar:
     st.markdown("### 🗂️ Attribute Query")
     region = st.selectbox("Region", sorted(gdf["region"].dropna().unique()))
     gdf_r = gdf[gdf["region"] == region]
-
     cercle = st.selectbox("Cercle", sorted(gdf_r["cercle"].dropna().unique()))
     gdf_c = gdf_r[gdf_r["cercle"] == cercle]
-
     commune = st.selectbox("Commune", sorted(gdf_c["commune"].dropna().unique()))
     gdf_commune = gdf_c[gdf_c["commune"] == commune]
-
     idse_list = ["No filter"] + sorted(gdf_commune["idse_new"].dropna().unique())
     idse_selected = st.selectbox("Unit_Geo", idse_list)
     gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
+    # =========================================================
+    # Spatial Query (Admin only)
+    # =========================================================
+    if st.session_state.user_role=="Admin":
+        st.markdown("### 🛰️ Spatial Query")
+        run_query = st.button("Run Spatial Query")
+        if run_query and points_gdf is not None:
+            st.session_state.pts_inside_map = safe_sjoin(points_gdf, gdf_idse, predicate="intersects")
+            st.success(f"✅ Spatial query returned {len(st.session_state.pts_inside_map)} points inside selected SE.")
+
 # =========================================================
-# MAP SETUP
+# MAP
 # =========================================================
 minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
 folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    name="Satellite", attr="Esri", control=True
+    name="Satellite",
+    attr="Esri",
+    control=True
 ).add_to(m)
+m.fit_bounds([[miny,minx],[maxy,maxx]])
 
 # SE Polygons
 fg_idse = folium.FeatureGroup(name="SE Polygons", show=True)
@@ -180,25 +181,18 @@ folium.GeoJson(
 fg_idse.add_to(m)
 
 # Concession Points
-points_to_plot = st.session_state.pts_inside_map if st.session_state.user_role=="Admin" else points_gdf
+points_to_plot = st.session_state.pts_inside_map if (st.session_state.user_role=="Admin" and st.session_state.pts_inside_map is not None) else points_gdf
 fg_points = folium.FeatureGroup(name="Concession Points", show=True)
 if points_to_plot is not None:
     points_to_plot = points_to_plot.to_crs(gdf_idse.crs)
     for _, r in points_to_plot.iterrows():
-        folium.CircleMarker(
-            location=[r.geometry.y, r.geometry.x],
-            radius=3, color="red", fill=True, fill_opacity=0.8
-        ).add_to(fg_points)
+        folium.CircleMarker(location=[r.geometry.y, r.geometry.x], radius=3, color="red", fill=True, fill_opacity=0.8).add_to(fg_points)
 fg_points.add_to(m)
 
 # Plugins
 MeasureControl().add_to(m)
-draw_control = Draw(export=True, draw_options={"polyline": False, "rectangle": False, "circle": False, "circlemarker": False})
-draw_control.add_to(m)
-MousePosition(
-    position="bottomright", separator=" | ", empty_string="Move cursor",
-    lng_first=True, num_digits=6, prefix="Coordinates:"
-).add_to(m)
+Draw(export=True, draw_options={"polyline": False, "rectangle": False, "circle": False, "circlemarker": False}).add_to(m)
+MousePosition(position="bottomright", separator=" | ", empty_string="Move cursor", lng_first=True, num_digits=6, prefix="Coordinates:").add_to(m)
 folium.LayerControl(collapsed=True).add_to(m)
 
 # =========================================================
@@ -209,42 +203,23 @@ with col_map:
     map_data = st_folium(m, height=500, returned_objects=["all_drawings"], use_container_width=True)
 
     # ================================
-    # SPATIAL QUERY (ADMIN)
-    # ================================
-    pts_inside_map = None
-    if st.session_state.user_role=="Admin":
-        run_query = st.button("Run Spatial Query", key="run_spatial_query")
-        if run_query:
-            pts_inside_map = safe_sjoin(points_gdf, gdf_idse, predicate="intersects")
-            st.session_state.pts_inside_map = pts_inside_map
-            st.success(f"✅ Spatial query returned {len(pts_inside_map)} points inside selected SE.")
-        else:
-            pts_inside_map = st.session_state.get("pts_inside_map", None)
-
-    # ================================
     # DYNAMIC MARKERS TABLE
     # ================================
     markers_list = []
-    if map_data and "all_drawings" in map_data:
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         for feature in map_data["all_drawings"]:
             geom_type = feature["geometry"]["type"]
             geom_shape = shape(feature["geometry"])
             if geom_type == "Point":
-                markers_list.append({"Latitude": geom_shape.y, "Longitude": geom_shape.x, "Label": ""})
-            elif geom_type == "Polygon":
-                st.session_state.drawn_polygons.append(feature)
+                markers_list.append({"Latitude": geom_shape.y, "Longitude": geom_shape.x})
+
     if markers_list:
         markers_df = pd.DataFrame(markers_list)
-        # Allow editing labels
-        markers_df["Label"] = st.experimental_data_editor(markers_df["Label"], num_rows="dynamic")
-        st.subheader("📍 Drawn Markers Coordinates")
+        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
         st.dataframe(markers_df)
-        csv = markers_df.to_csv(index=False)
-        st.download_button("📥 Download Marker Coordinates CSV", data=csv, file_name="markers_coordinates.csv", mime="text/csv")
+        st.download_button("📥 Download Marker Coordinates CSV", markers_df.to_csv(index=False), "markers_coordinates.csv", "text/csv")
 
-    # ================================
-    # POINTS INSIDE LAST DRAWN POLYGON
-    # ================================
+    # Polygon-based statistics
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         last_feature = map_data["all_drawings"][-1]
         drawn_polygon = shape(last_feature["geometry"])
@@ -262,34 +237,34 @@ with col_map:
                     st.dataframe(pts_in_polygon)
 
 with col_chart:
-    # Population bar chart
+    # Population bar chart & sex pie chart
     if idse_selected=="No filter":
         st.info("Select SE.")
     else:
         st.subheader("📊 Population")
         df_long = gdf_idse[["idse_new","pop_se","pop_se_ct"]].copy()
-        df_long = df_long.melt(id_vars="idse_new", value_vars=["pop_se","pop_se_ct"],
-                               var_name="Variable", value_name="Population")
+        df_long = df_long.melt(id_vars="idse_new", value_vars=["pop_se","pop_se_ct"], var_name="Variable", value_name="Population")
         df_long["Variable"] = df_long["Variable"].replace({"pop_se":"Pop Ref","pop_se_ct":"Pop Current"})
-        chart = alt.Chart(df_long).mark_bar().encode(
+        chart = (alt.Chart(df_long).mark_bar().encode(
             x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
             xOffset="Variable:N",
             y=alt.Y("Population:Q", title=None),
             color=alt.Color("Variable:N", legend=alt.Legend(orient="right", title="Type")),
-            tooltip=["idse_new","Variable","Population"]
-        ).properties(height=150)
+            tooltip=["idse_new","Variable","Population"])
+                 .properties(height=150))
         st.altair_chart(chart, use_container_width=True)
 
-        # Sex pie chart
         st.subheader("👥 Sex (M / F) in selected SE")
         if points_gdf is not None and {"Masculin","Feminin"}.issubset(points_gdf.columns):
-            gdf_idse_simple = gdf_idse.explode(ignore_index=True)
-            pts_inside = safe_sjoin(points_gdf, gdf_idse_simple, predicate="intersects")
-            m_total, f_total = (int(pts_inside["Masculin"].sum()), int(pts_inside["Feminin"].sum())) if not pts_inside.empty else (0,0)
+            pts_inside = safe_sjoin(points_gdf, gdf_idse, predicate="intersects")
+            m_total = int(pts_inside["Masculin"].sum()) if not pts_inside.empty else 0
+            f_total = int(pts_inside["Feminin"].sum()) if not pts_inside.empty else 0
             st.markdown(f"- 👨 **M**: {m_total}  \n- 👩 **F**: {f_total}  \n- 👥 **Total**: {m_total+f_total}")
             fig, ax = plt.subplots(figsize=(3,3))
-            ax.pie([m_total,f_total] if m_total+f_total>0 else [1], labels=["M","F"] if m_total+f_total>0 else ["No data"],
-                   autopct="%1.1f%%", startangle=90, colors=["#1f77b4","#ff7f0e"] if m_total+f_total>0 else ["lightgrey"])
+            if m_total+f_total>0:
+                ax.pie([m_total,f_total], labels=["M","F"], autopct="%1.1f%%", startangle=90, colors=["#1f77b4","#ff7f0e"])
+            else:
+                ax.pie([1], labels=["No data"], colors=["lightgrey"])
             ax.axis("equal")
             st.pyplot(fig)
 
