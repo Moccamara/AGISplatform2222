@@ -31,6 +31,7 @@ if "auth_ok" not in st.session_state:
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
+    st.session_state.run_spatial_query = False  # <-- Added to store query state
 
 # =========================================================
 # LOGOUT
@@ -40,6 +41,7 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
+    st.session_state.run_spatial_query = False
     st.rerun()
 
 # =========================================================
@@ -159,15 +161,24 @@ with st.sidebar:
     gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
     # =========================================================
-    # Spatial Query (Admin only)
+    # Spatial Query (Admin only) with Run/Cancel
     # =========================================================
     pts_inside_map = None
     if st.session_state.user_role=="Admin":
         st.markdown("### 🛰️ Spatial Query")
-        run_query = st.button("Run Spatial Query")
-        if run_query and points_gdf is not None:
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("Run Spatial Query"):
+                st.session_state.run_spatial_query = True
+        with col2:
+            if st.button("Cancel Spatial Query"):
+                st.session_state.run_spatial_query = False
+
+        if st.session_state.run_spatial_query and points_gdf is not None:
             pts_inside_map = safe_sjoin(points_gdf, gdf_idse, predicate="intersects")
             st.success(f"✅ Spatial query returned {len(pts_inside_map)} points inside selected SE.")
+        else:
+            pts_inside_map = None
 
 # =========================================================
 # MAP
@@ -347,4 +358,3 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
-
