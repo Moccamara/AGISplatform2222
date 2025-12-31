@@ -2,11 +2,13 @@ import streamlit as st
 import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
-from folium.plugins import MeasureControl, Draw
+from folium.plugins import MeasureControl, Draw, MousePosition
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
 from shapely.geometry import shape
+from branca.element import MacroElement
+from jinja2 import Template
 
 # =========================================================
 # APP CONFIG
@@ -23,7 +25,7 @@ USERS = {
 }
 
 # =========================================================
-# SESSION STATE INIT
+# SESSION INIT
 # =========================================================
 if "auth_ok" not in st.session_state:
     st.session_state.auth_ok = False
@@ -35,8 +37,10 @@ if "auth_ok" not in st.session_state:
 # LOGOUT
 # =========================================================
 def logout():
-    for k in list(st.session_state.keys()):
-        del st.session_state[k]
+    st.session_state.auth_ok = False
+    st.session_state.username = None
+    st.session_state.user_role = None
+    st.session_state.points_gdf = None
     st.rerun()
 
 # =========================================================
@@ -47,15 +51,15 @@ if not st.session_state.auth_ok:
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
 
-    if st.sidebar.button("Login"):
+    if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
             st.session_state.username = username
             st.session_state.user_role = USERS[username]["role"]
+            st.success("✅ Login successful")
             st.rerun()
         else:
             st.sidebar.error("❌ Incorrect password")
-
     st.stop()
 
 # =========================================================
@@ -65,24 +69,20 @@ SE_URL = "https://raw.githubusercontent.com/Moccamara/web_mapping/master/data/SE
 
 @st.cache_data(show_spinner=False)
 def load_se_data(url):
-    gdf = gpd.read_file(url).to_crs(epsg=4326)
+    gdf = gpd.read_file(url)
+    if gdf.crs is None:
+        gdf = gdf.set_crs(epsg=4326)
+    else:
+        gdf = gdf.to_crs(epsg=4326)
     gdf.columns = gdf.columns.str.lower().str.strip()
-
-    gdf = gdf.rename(columns={
-        "lregion": "region",
-        "lcercle": "cercle",
-        "lcommune": "commune"
-    })
-
-    for col in ["region", "cercle", "commune", "idse_new"]:
+    gdf = gdf.rename(columns={"lregion":"region","lcercle":"cercle","lcommune":"commune"})
+    gdf = gdf[gdf.is_valid & ~gdf.is_empty]
+    for col in ["region","cercle","commune","idse_new"]:
         if col not in gdf.columns:
             gdf[col] = ""
-
-    for col in ["pop_se", "pop_se_ct"]:
+    for col in ["pop_se","pop_se_ct"]:
         if col not in gdf.columns:
             gdf[col] = 0
-
-    gdf = gdf[gdf.is_valid & ~gdf.is_empty]
     return gdf
 
 gdf = load_se_data(SE_URL)
@@ -93,12 +93,11 @@ gdf = load_se_data(SE_URL)
 POINTS_URL = "https://raw.githubusercontent.com/Moccamara/web_mapping/master/data/concession.csv"
 
 @st.cache_data(show_spinner=False)
-def load_points(url):
+def load_points_from_github(url):
     df = pd.read_csv(url)
     df["LAT"] = pd.to_numeric(df["LAT"], errors="coerce")
     df["LON"] = pd.to_numeric(df["LON"], errors="coerce")
-    df = df.dropna(subset=["LAT", "LON"])
-
+    df = df.dropna(subset=["LAT","LON"])
     return gpd.GeoDataFrame(
         df,
         geometry=gpd.points_from_xy(df["LON"], df["LAT"]),
@@ -106,19 +105,20 @@ def load_points(url):
     )
 
 if st.session_state.points_gdf is None:
-    st.session_state.points_gdf = load_points(POINTS_URL)
+    st.session_state.points_gdf = load_points_from_github(POINTS_URL)
 
 points_gdf = st.session_state.points_gdf
 
 # =========================================================
 # SAFE SPATIAL JOIN
 # =========================================================
-def safe_sjoin(points, polygons):
-    polygons = polygons.copy()
-    for col in polygons.columns:
-        if col.startswith("index_"):
-            polygons.drop(columns=[col], inplace=True)
-    return gpd.sjoin(points, polygons, predicate="intersects", how="inner")
+def safe_sjoin(points, polygons, how="inner", predicate="intersects"):
+    if points is None or polygons is None or points.empty or polygons.empty:
+        return gpd.GeoDataFrame()
+    for col in ["index_right", "_r"]:
+        if col in polygons.columns:
+            polygons = polygons.drop(columns=[col])
+    return gpd.sjoin(points, polygons, how=how, predicate=predicate)
 
 # =========================================================
 # SIDEBAR
@@ -129,7 +129,6 @@ with st.sidebar:
         logout()
 
     st.markdown("### 🗂 Attribute Query")
-
     region = st.selectbox("Region", sorted(gdf["region"].unique()))
     gdf_r = gdf[gdf["region"] == region]
 
@@ -140,58 +139,27 @@ with st.sidebar:
     gdf_commune = gdf_c[gdf_c["commune"] == commune]
 
     idse_list = ["No filter"] + sorted(gdf_commune["idse_new"].unique())
-    idse_selected = st.selectbox("SE", idse_list)
+    idse_selected = st.selectbox("Unit_Geo", idse_list)
+    gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
-    gdf_idse = (
-        gdf_commune if idse_selected == "No filter"
-        else gdf_commune[gdf_commune["idse_new"] == idse_selected]
-    )
-
-# =========================================================
-# MAP LEGEND
-# =========================================================
-def add_legend(map_obj):
-    legend_html = """
-     <div style="
-     position: fixed;
-     bottom: 40px;
-     left: 40px;
-     width: 180px;
-     height: 110px;
-     border:2px solid grey;
-     z-index:9999;
-     font-size:14px;
-     background-color:white;
-     padding: 10px;
-     ">
-     <b>Legend</b><br>
-     <i style="background:blue;opacity:0.5;width:10px;height:10px;
-        display:inline-block;margin-right:6px;"></i> SE Polygon<br>
-     <i style="background:red;width:10px;height:10px;
-        display:inline-block;margin-right:6px;"></i> Concession Point
-     </div>
-     """
-    map_obj.get_root().html.add_child(folium.Element(legend_html))
+    # ✅ LEGEND TOGGLE (NEW)
+    st.markdown("### 🧭 Map Legend")
+    show_legend = st.checkbox("Show / Hide Legend", value=True)
 
 # =========================================================
 # MAP
 # =========================================================
 minx, miny, maxx, maxy = gdf_idse.total_bounds
-m = folium.Map(
-    location=[(miny + maxy) / 2, (minx + maxx) / 2],
-    zoom_start=17
-)
-folium.TileLayer("OpenStreetMap").add_to(m)
+m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
 
+folium.TileLayer("OpenStreetMap").add_to(m)
 folium.GeoJson(
     gdf_idse,
-    style_function=lambda x: {
-        "color": "blue",
-        "weight": 2,
-        "fillOpacity": 0.15
-    },
-    tooltip=folium.GeoJsonTooltip(fields=["idse_new", "pop_se", "pop_se_ct"])
+    name="SE",
+    style_function=lambda x: {"color":"blue","weight":2,"fillOpacity":0.15},
+    tooltip=folium.GeoJsonTooltip(fields=["idse_new","pop_se","pop_se_ct"])
 ).add_to(m)
+
 for _, r in points_gdf.iterrows():
     folium.CircleMarker(
         [r.geometry.y, r.geometry.x],
@@ -201,99 +169,63 @@ for _, r in points_gdf.iterrows():
         fill_opacity=0.8
     ).add_to(m)
 
-Draw(export=False).add_to(m)
+Draw(export=True).add_to(m)
 MeasureControl().add_to(m)
-folium.LayerControl().add_to(m)
+MousePosition(prefix="Coordinates:").add_to(m)
+folium.LayerControl(collapsed=True).add_to(m)
 
-# ✅ ADD LEGEND
-add_legend(m)
+# =========================================================
+# ✅ DYNAMIC LEGEND (OPEN / CLOSE)
+# =========================================================
+if show_legend:
+    legend = MacroElement()
+    legend._template = Template("""
+    {% macro html(this, kwargs) %}
+    <div style="
+        position: fixed;
+        bottom: 30px;
+        left: 30px;
+        z-index:9999;
+        background-color: white;
+        padding: 10px;
+        border: 2px solid grey;
+        border-radius: 6px;
+        font-size: 13px;
+    ">
+        <b>🧭 Map Legend</b><br>
+        <i style="background:blue;width:10px;height:10px;display:inline-block"></i>
+        SE Polygon<br>
+        <i style="background:red;width:10px;height:10px;display:inline-block"></i>
+        Concession Point
+    </div>
+    {% endmacro %}
+    """)
+    m.get_root().add_child(legend)
 
 # =========================================================
 # LAYOUT
 # =========================================================
-col_map, col_chart = st.columns((3, 1), gap="small")
+col_map, col_chart = st.columns((3,1), gap="small")
 
-# ---------------- MAP + POLYGON QUERY -------------------
 with col_map:
-    map_data = st_folium(
-        m,
-        height=500,
-        returned_objects=["all_drawings"],
-        use_container_width=True
-    )
-    if map_data and map_data.get("all_drawings"):
-        last_feature = map_data["all_drawings"][-1]
+    st_folium(m, height=500, use_container_width=True)
 
-        if "geometry" in last_feature:
-            poly = shape(last_feature["geometry"])
-            pts_poly = points_gdf[points_gdf.geometry.within(poly)]
-            st.subheader("🟢 Polygon-based statistics")
-            if pts_poly.empty:
-                st.info("No points inside drawn polygon.")
-            else:
-                m_poly = pd.to_numeric(
-                    pts_poly.get("Masculin"), errors="coerce"
-                ).fillna(0).sum()
-
-                f_poly = pd.to_numeric(
-                    pts_poly.get("Feminin"), errors="coerce"
-                ).fillna(0).sum()
-
-                st.markdown(
-                    f"""
-                    - 👨 **Masculin**: {int(m_poly)}
-                    - 👩 **Feminin**: {int(f_poly)}
-                    - 👥 **Total**: {int(m_poly + f_poly)}
-                    """
-                )
-                fig, ax = plt.subplots(figsize=(3, 3))
-                ax.pie(
-                    [m_poly, f_poly],
-                    labels=["Masculin", "Feminin"],
-                    autopct="%1.1f%%",
-                    startangle=90
-                )
-                ax.axis("equal")
-                st.pyplot(fig)
-
-# ---------------- RIGHT SE CHARTS -------------------
 with col_chart:
-    if idse_selected == "No filter":
-        st.info("Select SE.")
-    else:
-        st.subheader("📊 Population")
-
-        df_long = gdf_idse[["idse_new", "pop_se", "pop_se_ct"]].melt(
+    st.subheader("📊 Population (SE)")
+    if idse_selected != "No filter":
+        df_long = gdf_idse[["idse_new","pop_se","pop_se_ct"]].melt(
             id_vars="idse_new",
             var_name="Type",
             value_name="Population"
         )
-        chart = alt.Chart(df_long).mark_bar().encode(
-            x="idse_new:N",
-            y="Population:Q",
-            color="Type:N"
-        ).properties(height=180)
-
-        st.altair_chart(chart, use_container_width=True)
-
-        st.subheader("👥 Sex (SE)")
-
-        pts_se = safe_sjoin(points_gdf, gdf_idse)
-
-        m_total = pts_se.get("Masculin", pd.Series()).sum()
-        f_total = pts_se.get("Feminin", pd.Series()).sum()
-
-        st.markdown(
-            f"""
-            - 👨 **M**: {int(m_total)}
-            - 👩 **F**: {int(f_total)}
-            - 👥 **Total**: {int(m_total + f_total)}
-            """
+        st.altair_chart(
+            alt.Chart(df_long).mark_bar().encode(
+                x="idse_new:N",
+                y="Population:Q",
+                color="Type:N"
+            ),
+            use_container_width=True
         )
-        fig, ax = plt.subplots(figsize=(3, 3))
-        ax.pie([m_total, f_total], labels=["M", "F"], autopct="%1.1f%%")
-        ax.axis("equal")
-        st.pyplot(fig)
 
 # =========================================================
 # FOOTER
@@ -301,5 +233,5 @@ with col_chart:
 st.markdown("""
 ---
 **Geospatial Enterprise Web Mapping**  
-**Mahamadou CAMARA, PhD – Geomatics Engineering** © 2025
+**Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
