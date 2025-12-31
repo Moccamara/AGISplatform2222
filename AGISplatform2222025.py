@@ -3,11 +3,10 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import MeasureControl, Draw, MousePosition
-from shapely.geometry import shape
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
-from folium.features import DivIcon
+from shapely.geometry import shape, Point
 import json
 
 # =========================================================
@@ -32,7 +31,6 @@ if "auth_ok" not in st.session_state:
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawn_markers = []  # Store marker points + label
 
 # =========================================================
 # LOGOUT
@@ -42,7 +40,6 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawn_markers = []
     st.rerun()
 
 # =========================================================
@@ -52,6 +49,7 @@ if not st.session_state.auth_ok:
     st.sidebar.header("🔐 Login")
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
+
     if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
@@ -185,6 +183,7 @@ folium.TileLayer(
     attr="Esri",
     control=True
 ).add_to(m)
+
 m.fit_bounds([[miny,minx],[maxy,maxx]])
 
 # ===== Overlay layers =====
@@ -230,21 +229,6 @@ MousePosition(
 folium.LayerControl(collapsed=True).add_to(m)
 
 # =========================================================
-# MARKERS & GEOJSON FUNCTIONS
-# =========================================================
-def markers_to_geojson(markers):
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates":[m["lon"], m["lat"]]},
-                "properties": {"id": m["id"], "label": m["label"]}
-            } for m in markers
-        ]
-    }
-
-# =========================================================
 # LAYOUT
 # =========================================================
 col_map, col_chart = st.columns((3,1), gap="small")
@@ -258,47 +242,40 @@ with col_map:
     )
 
     # ================================
-    # DYNAMIC MARKER TABLE AND CSV
+    # DYNAMIC MARKER TABLE AND GEOJSON DOWNLOAD
     # ================================
+    markers_list = []
+
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         for feature in map_data["all_drawings"]:
             geom_type = feature["geometry"]["type"]
             geom_shape = shape(feature["geometry"])
             if geom_type == "Point":
-                # Assign unique ID and default label
-                marker_id = len(st.session_state.drawn_markers)+1
-                st.session_state.drawn_markers.append({
-                    "id": marker_id,
-                    "lat": geom_shape.y,
-                    "lon": geom_shape.x,
-                    "label": f"Marker {marker_id}"
-                })
+                markers_list.append({"Latitude": geom_shape.y, "Longitude": geom_shape.x, "Label": ""})
 
-    # Show marker table
-    if st.session_state.drawn_markers:
-        markers_df = pd.DataFrame([{"ID": m["id"], "Latitude": m["lat"], "Longitude": m["lon"], "Label": m["label"]} 
-                                   for m in st.session_state.drawn_markers])
-        st.subheader("📍 Drawn Marker Points")
-        st.dataframe(markers_df)
+    if markers_list:
+        markers_df = pd.DataFrame(markers_list)
+        st.subheader("📍 Marker Table (Editable Labels)")
+        edited_df = st.data_editor(markers_df, num_rows="dynamic")
 
-        # Download CSV
-        csv = markers_df.to_csv(index=False)
-        st.download_button("📥 Download Marker Coordinates CSV", data=csv, file_name="markers_coordinates.csv", mime="text/csv")
-
-        # Download GeoJSON
-        geojson_data = markers_to_geojson(st.session_state.drawn_markers)
+        # Save edited markers to GeoJSON
+        geojson_data = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [row.Longitude, row.Latitude]},
+                    "properties": {"Label": row.Label}
+                }
+                for _, row in edited_df.iterrows()
+            ]
+        }
         st.download_button(
-            "💾 Download Markers as GeoJSON",
-            data=json.dumps(geojson_data, indent=2),
+            label="💾 Download Markers as GeoJSON",
+            data=json.dumps(geojson_data),
             file_name="markers.geojson",
-            mime="application/geo+json"
+            mime="application/json"
         )
-
-        # Editable labels
-        st.subheader("✏️ Edit Marker Labels")
-        for i, mkr in enumerate(st.session_state.drawn_markers):
-            new_label = st.text_input(f"Marker {mkr['id']} label", value=mkr["label"], key=f"edit_label_{mkr['id']}")
-            st.session_state.drawn_markers[i]["label"] = new_label
 
 with col_chart:
     # Population bar chart
@@ -321,7 +298,9 @@ with col_chart:
                  .properties(height=150))
         st.altair_chart(chart, use_container_width=True)
 
+        # ===========================
         # Sex pie chart
+        # ===========================
         st.subheader("👥 Sex (M / F) in selected SE")
         if points_gdf is not None and {"Masculin","Feminin"}.issubset(points_gdf.columns):
             gdf_idse_simple = gdf_idse.explode(ignore_index=True)
