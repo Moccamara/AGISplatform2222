@@ -239,49 +239,49 @@ with col_map:
         use_container_width=True
     )
 
-    # ================================
-    # PROCESS DRAWN GEOMETRIES (POINTS + POLYGONS)
-    # ================================
-    pts_in_polygon = gpd.GeoDataFrame(columns=points_gdf.columns, crs=points_gdf.crs)
-    markers_list = []
+  # ================================
+# PROCESS DRAWN GEOMETRIES (POINTS + POLYGONS)
+# ================================
+pts_in_polygon = gpd.GeoDataFrame(columns=points_gdf.columns, crs=points_gdf.crs)
+markers_list = []
 
-    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-        for feature in map_data["all_drawings"]:
-            geom_type = feature["geometry"]["type"]
-            geom_shape = shape(feature["geometry"])
+if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+    for feature in map_data["all_drawings"]:
+        geom_type = feature["geometry"]["type"]
+        geom_shape = shape(feature["geometry"])
 
-            if geom_type == "Polygon":
-                pts_poly = points_gdf[points_gdf.geometry.within(geom_shape)]
-                pts_in_polygon = pd.concat([pts_in_polygon, pts_poly], ignore_index=True)
-            elif geom_type == "Point":
-                markers_list.append((geom_shape.y, geom_shape.x))
+        if geom_type == "Polygon":
+            pts_poly = points_gdf[points_gdf.geometry.within(geom_shape)]
+            pts_in_polygon = pd.concat([pts_in_polygon, pts_poly], ignore_index=True)
+        elif geom_type == "Point":
+            markers_list.append((geom_shape.y, geom_shape.x))
 
-    # Display polygon stats
-    st.subheader("🟢 Points inside drawn polygon")
-    st.markdown(f"- Total points: {len(pts_in_polygon)}")
-    if not pts_in_polygon.empty:
-        attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
-        if attr_cols:
-            stats = pts_in_polygon[attr_cols].sum().to_frame().T
-            stats["Total"] = stats.sum(axis=1)
-            st.dataframe(stats)
-        else:
-            st.dataframe(pts_in_polygon)
+    # Only display stats if user drew at least one geometry
+    if not pts_in_polygon.empty or markers_list:
+        # Display polygon stats
+        if not pts_in_polygon.empty:
+            st.subheader("🟢 Points inside drawn polygon")
+            st.markdown(f"- Total points: {len(pts_in_polygon)}")
+            attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
+            if attr_cols:
+                stats = pts_in_polygon[attr_cols].sum().to_frame().T
+                stats["Total"] = stats.sum(axis=1)
+                st.dataframe(stats)
+            else:
+                st.dataframe(pts_in_polygon)
 
-    # Display markers table
-    if markers_list:
-        markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
-        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
-        st.dataframe(markers_df)
-
-        csv = markers_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Marker Coordinates CSV",
-            data=csv,
-            file_name="markers_coordinates.csv",
-            mime="text/csv"
-        )
-
+        # Display markers table
+        if markers_list:
+            markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
+            st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+            st.dataframe(markers_df)
+            csv = markers_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Marker Coordinates CSV",
+                data=csv,
+                file_name="markers_coordinates.csv",
+                mime="text/csv"
+            )
 with col_chart:
     # Population bar chart
     if idse_selected=="No filter":
@@ -331,3 +331,4 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
