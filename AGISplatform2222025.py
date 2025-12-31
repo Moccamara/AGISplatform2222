@@ -30,6 +30,7 @@ if "auth_ok" not in st.session_state:
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
+    st.session_state.polygons_list = []
 
 # =========================================================
 # LOGOUT
@@ -39,6 +40,7 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
+    st.session_state.polygons_list = []
     st.rerun()
 
 # =========================================================
@@ -241,38 +243,57 @@ with col_map:
     )
 
     # ================================
-# DYNAMIC POLYGON POINTS TABLE (Independent)
-# ================================
-if "polygons_list" not in st.session_state:
-    st.session_state.polygons_list = []
+    # DYNAMIC MARKER TABLE
+    # ================================
+    markers_list = []
 
-# Capture new polygons from map
-if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-    for feature in map_data["all_drawings"]:
-        geom_type = feature["geometry"]["type"]
-        geom_shape = shape(feature["geometry"])
-        if geom_type == "Polygon":
-            # Avoid duplicate entries
-            if geom_shape not in st.session_state.polygons_list:
-                st.session_state.polygons_list.append(geom_shape)
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        for feature in map_data["all_drawings"]:
+            geom_type = feature["geometry"]["type"]
+            geom_shape = shape(feature["geometry"])
+            if geom_type == "Point":
+                markers_list.append((geom_shape.y, geom_shape.x))
 
-# Display points inside polygons
-if st.session_state.polygons_list and points_gdf is not None:
-    st.subheader("🟢 Points inside drawn polygons (Independent Table)")
-    all_poly_stats = []
-    for idx, poly in enumerate(st.session_state.polygons_list, start=1):
-        pts_in_poly = points_gdf[points_gdf.geometry.within(poly)]
-        total_pts = len(pts_in_poly)
-        row = {"Polygon #": idx, "Total points": total_pts}
-        # If there are sex columns, sum them
-        if not pts_in_poly.empty and {"Masculin","Feminin"}.issubset(pts_in_poly.columns):
-            row["Masculin"] = int(pts_in_poly["Masculin"].sum())
-            row["Feminin"] = int(pts_in_poly["Feminin"].sum())
-            row["Total"] = row["Masculin"] + row["Feminin"]
-        all_poly_stats.append(row)
-    poly_df = pd.DataFrame(all_poly_stats)
-    st.dataframe(poly_df, height=200)
+    if markers_list:
+        markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
+        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+        st.dataframe(markers_df, height=200)
+        csv = markers_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Marker Coordinates CSV",
+            data=csv,
+            file_name="markers_coordinates.csv",
+            mime="text/csv"
+        )
 
+    # ================================
+    # DYNAMIC POLYGON POINTS TABLE (Independent)
+    # ================================
+    # Capture new polygons
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        for feature in map_data["all_drawings"]:
+            geom_type = feature["geometry"]["type"]
+            geom_shape = shape(feature["geometry"])
+            if geom_type == "Polygon":
+                if geom_shape not in st.session_state.polygons_list:
+                    st.session_state.polygons_list.append(geom_shape)
+
+    if st.session_state.polygons_list and points_gdf is not None:
+        st.subheader("🟢 Points inside drawn polygons (Independent Table)")
+        all_poly_stats = []
+        for idx, poly in enumerate(st.session_state.polygons_list, start=1):
+            pts_in_poly = points_gdf[points_gdf.geometry.within(poly)]
+            total_pts = len(pts_in_poly)
+            row = {"Polygon #": idx, "Total points": total_pts}
+            if not pts_in_poly.empty and {"Masculin","Feminin"}.issubset(pts_in_poly.columns):
+                row["Masculin"] = int(pts_in_poly["Masculin"].sum())
+                row["Feminin"] = int(pts_in_poly["Feminin"].sum())
+                row["Total"] = row["Masculin"] + row["Feminin"]
+            all_poly_stats.append(row)
+        poly_df = pd.DataFrame(all_poly_stats)
+        st.dataframe(poly_df, height=200)
+
+with col_chart:
     # Population bar chart
     if idse_selected=="No filter":
         st.info("Select SE.")
@@ -321,4 +342,3 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
-
