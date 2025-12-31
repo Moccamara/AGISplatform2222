@@ -266,8 +266,8 @@ if st.session_state.markers_list:
             [{'selector': 'th', 'props': [('font-size', '10px')]},
              {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
         ),
-        height=50,
-        width=100
+        height=200,
+        width=300
     )
 
     csv = markers_df.to_csv(index=False)
@@ -277,6 +277,7 @@ if st.session_state.markers_list:
         file_name="markers_coordinates.csv",
         mime="text/csv"
     )
+
 
 
     # Polygon-based statistics
@@ -352,5 +353,6 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
 
 
