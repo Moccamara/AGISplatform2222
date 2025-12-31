@@ -3,13 +3,10 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import MeasureControl, Draw, MousePosition
-from shapely.geometry import shape, Point, Polygon
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
-from shapely import wkt
-import json
-import os
+from shapely.geometry import shape
 
 # =========================================================
 # APP CONFIG
@@ -33,7 +30,6 @@ if "auth_ok" not in st.session_state:
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawn_features = []
 
 # =========================================================
 # LOGOUT
@@ -43,7 +39,6 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.session_state.drawn_features = []
     st.experimental_rerun()
 
 # =========================================================
@@ -53,6 +48,7 @@ if not st.session_state.auth_ok:
     st.sidebar.header("🔐 Login")
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
+    
     if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
@@ -150,14 +146,18 @@ with st.sidebar:
     st.markdown("### 🗂️ Attribute Query")
     region = st.selectbox("Region", sorted(gdf["region"].dropna().unique()))
     gdf_r = gdf[gdf["region"] == region]
+
     cercle = st.selectbox("Cercle", sorted(gdf_r["cercle"].dropna().unique()))
     gdf_c = gdf_r[gdf_r["cercle"] == cercle]
+
     commune = st.selectbox("Commune", sorted(gdf_c["commune"].dropna().unique()))
     gdf_commune = gdf_c[gdf_c["commune"] == commune]
+
     idse_list = ["No filter"] + sorted(gdf_commune["idse_new"].dropna().unique())
     idse_selected = st.selectbox("Unit_Geo", idse_list)
     gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
+    # Spatial Query (Admin only)
     pts_inside_map = None
     if st.session_state.user_role=="Admin":
         st.markdown("### 🛰️ Spatial Query")
@@ -171,6 +171,8 @@ with st.sidebar:
 # =========================================================
 minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
+
+# Base layers
 folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -180,7 +182,7 @@ folium.TileLayer(
 ).add_to(m)
 m.fit_bounds([[miny,minx],[maxy,maxx]])
 
-# ===== Overlay layers =====
+# Overlay layers
 fg_idse = folium.FeatureGroup(name="SE Polygons", show=True)
 folium.GeoJson(
     gdf_idse,
@@ -231,9 +233,7 @@ with col_map:
         use_container_width=True
     )
 
-    # ================================
-    # Drawn markers table
-    # ================================
+    # Drawn markers
     markers_list = []
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         for feature in map_data["all_drawings"]:
@@ -253,9 +253,7 @@ with col_map:
             mime="text/csv"
         )
 
-    # ================================
-    # Polygon-based statistics (KEEP AS-IS)
-    # ================================
+    # Polygon-based statistics (keep intact)
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         last_feature = map_data["all_drawings"][-1]
         drawn_polygon = shape(last_feature["geometry"])
@@ -272,28 +270,10 @@ with col_map:
                 else:
                     st.dataframe(pts_in_polygon)
 
-    # ================================
-    # Persist drawn polygons/markers
-    # ================================
-    if map_data and "all_drawings" in map_data:
-        geojson_file = "drawn_features.geojson"
-        features_list = []
-        for f in map_data["all_drawings"]:
-            features_list.append({
-                "type":"Feature",
-                "properties": {"label": f.get("properties", {}).get("label","")},
-                "geometry": f["geometry"]
-            })
-        geojson_data = {"type":"FeatureCollection", "features":features_list}
-        with open(geojson_file, "w") as f:
-            json.dump(geojson_data, f)
-        st.success(f"✅ Drawn features saved to {geojson_file}")
-
 with col_chart:
     if idse_selected=="No filter":
         st.info("Select SE.")
     else:
-        # Population bar chart
         st.subheader("📊 Population")
         df_long = gdf_idse[["idse_new","pop_se","pop_se_ct"]].copy()
         df_long["idse_new"] = df_long["idse_new"].astype(str)
@@ -302,12 +282,13 @@ with col_chart:
         df_long["Variable"] = df_long["Variable"].replace({"pop_se":"Pop Ref","pop_se_ct":"Pop Current"})
         chart = (alt.Chart(df_long)
                  .mark_bar()
-                 .encode(x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
-                         xOffset="Variable:N",
-                         y=alt.Y("Population:Q", title=None),
-                         color=alt.Color("Variable:N", legend=alt.Legend(orient="right", title="Type")),
-                         tooltip=["idse_new","Variable","Population"])
-                 .properties(height=150))
+                 .encode(
+                     x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
+                     xOffset="Variable:N",
+                     y=alt.Y("Population:Q", title=None),
+                     color=alt.Color("Variable:N", legend=alt.Legend(orient="right", title="Type")),
+                     tooltip=["idse_new","Variable","Population"]
+                 ).properties(height=150))
         st.altair_chart(chart, use_container_width=True)
 
         # Sex pie chart
@@ -321,7 +302,6 @@ with col_chart:
             else:
                 m_total, f_total = 0,0
             st.markdown(f"- 👨 **M**: {m_total}  \n- 👩 **F**: {f_total}  \n- 👥 **Total**: {m_total+f_total}")
-
             fig, ax = plt.subplots(figsize=(3,3))
             if m_total + f_total > 0:
                 ax.pie([m_total,f_total], labels=["M","F"], autopct="%1.1f%%", startangle=90, colors=["#1f77b4","#ff7f0e"])
