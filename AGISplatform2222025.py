@@ -3,6 +3,7 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import MeasureControl, Draw, MousePosition
+from folium.features import DivIcon  # ✅ ADDED
 import pandas as pd
 import altair as alt
 import matplotlib.pyplot as plt
@@ -31,6 +32,10 @@ if "auth_ok" not in st.session_state:
     st.session_state.user_role = None
     st.session_state.points_gdf = None
 
+# ✅ ADDED: persistent drawn markers
+if "drawn_markers" not in st.session_state:
+    st.session_state.drawn_markers = []
+
 # =========================================================
 # LOGOUT
 # =========================================================
@@ -39,7 +44,8 @@ def logout():
     st.session_state.username = None
     st.session_state.user_role = None
     st.session_state.points_gdf = None
-    st.experimental_rerun()
+    st.session_state.drawn_markers = []  # ✅ ADDED
+    st.rerun()
 
 # =========================================================
 # LOGIN
@@ -48,14 +54,14 @@ if not st.session_state.auth_ok:
     st.sidebar.header("🔐 Login")
     username = st.sidebar.selectbox("User", list(USERS.keys()))
     password = st.sidebar.text_input("Password", type="password")
-    
+
     if st.sidebar.button("Login", use_container_width=True):
         if password == USERS[username]["password"]:
             st.session_state.auth_ok = True
             st.session_state.username = username
             st.session_state.user_role = USERS[username]["role"]
             st.success("✅ Login successful")
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.sidebar.error("❌ Incorrect password")
     st.stop()
@@ -157,7 +163,6 @@ with st.sidebar:
     idse_selected = st.selectbox("Unit_Geo", idse_list)
     gdf_idse = gdf_commune if idse_selected=="No filter" else gdf_commune[gdf_commune["idse_new"]==idse_selected]
 
-    # Spatial Query (Admin only)
     pts_inside_map = None
     if st.session_state.user_role=="Admin":
         st.markdown("### 🛰️ Spatial Query")
@@ -172,7 +177,6 @@ with st.sidebar:
 minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
 
-# Base layers
 folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -180,9 +184,10 @@ folium.TileLayer(
     attr="Esri",
     control=True
 ).add_to(m)
+
 m.fit_bounds([[miny,minx],[maxy,maxx]])
 
-# Overlay layers
+# SE Polygons
 fg_idse = folium.FeatureGroup(name="SE Polygons", show=True)
 folium.GeoJson(
     gdf_idse,
@@ -191,6 +196,7 @@ folium.GeoJson(
 ).add_to(fg_idse)
 fg_idse.add_to(m)
 
+# Concession Points
 points_to_plot = pts_inside_map if (st.session_state.user_role=="Admin" and pts_inside_map is not None) else points_gdf
 fg_points = folium.FeatureGroup(name="Concession Points", show=True)
 if points_to_plot is not None:
@@ -204,6 +210,28 @@ if points_to_plot is not None:
             fill_opacity=0.8
         ).add_to(fg_points)
 fg_points.add_to(m)
+
+# ✅ ADDED: DRAW SAVED MARKERS WITH AUTO-NUMBERED LABELS
+for i, (lat, lon) in enumerate(st.session_state.drawn_markers, start=1):
+    folium.Marker(
+        location=[lat, lon],
+        icon=DivIcon(
+            html=f"""
+            <div style="
+                font-size:12px;
+                background:white;
+                border:2px solid red;
+                border-radius:50%;
+                width:24px;
+                height:24px;
+                text-align:center;
+                line-height:20px;
+                font-weight:bold;">
+                {i}
+            </div>
+            """
+        )
+    ).add_to(m)
 
 # Plugins
 MeasureControl().add_to(m)
@@ -233,27 +261,40 @@ with col_map:
         use_container_width=True
     )
 
-    # Drawn markers
     markers_list = []
+
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         for feature in map_data["all_drawings"]:
-            geom_type = feature["geometry"]["type"]
             geom_shape = shape(feature["geometry"])
-            if geom_type == "Point":
+            if feature["geometry"]["type"] == "Point":
                 markers_list.append((geom_shape.y, geom_shape.x))
+
+    # ✅ ADDED: SAVE TO SESSION STATE
+    for lat, lon in markers_list:
+        if (lat, lon) not in st.session_state.drawn_markers:
+            st.session_state.drawn_markers.append((lat, lon))
+
     if markers_list:
-        markers_df = pd.DataFrame(markers_list, columns=["Latitude","Longitude"])
-        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+        markers_df = pd.DataFrame(
+            list(enumerate(markers_list, start=1)),
+            columns=["ID","Coordinates"]
+        )
+        markers_df[["Latitude","Longitude"]] = pd.DataFrame(
+            markers_df["Coordinates"].tolist(), index=markers_df.index
+        )
+        markers_df = markers_df.drop(columns="Coordinates")
+
+        st.subheader("📍 Drawn Markers Coordinates (Persistent)")
         st.dataframe(markers_df)
-        csv = markers_df.to_csv(index=False)
+
         st.download_button(
             label="📥 Download Marker Coordinates CSV",
-            data=csv,
+            data=markers_df.to_csv(index=False),
             file_name="markers_coordinates.csv",
             mime="text/csv"
         )
 
-    # Polygon-based statistics (keep intact)
+    # Polygon-based statistics (UNCHANGED)
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
         last_feature = map_data["all_drawings"][-1]
         drawn_polygon = shape(last_feature["geometry"])
@@ -282,31 +323,27 @@ with col_chart:
         df_long["Variable"] = df_long["Variable"].replace({"pop_se":"Pop Ref","pop_se_ct":"Pop Current"})
         chart = (alt.Chart(df_long)
                  .mark_bar()
-                 .encode(
-                     x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
-                     xOffset="Variable:N",
-                     y=alt.Y("Population:Q", title=None),
-                     color=alt.Color("Variable:N", legend=alt.Legend(orient="right", title="Type")),
-                     tooltip=["idse_new","Variable","Population"]
-                 ).properties(height=150))
+                 .encode(x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
+                         xOffset="Variable:N",
+                         y=alt.Y("Population:Q", title=None),
+                         color=alt.Color("Variable:N", legend=alt.Legend(orient="right", title="Type")),
+                         tooltip=["idse_new","Variable","Population"])
+                 .properties(height=150))
         st.altair_chart(chart, use_container_width=True)
 
-        # Sex pie chart
         st.subheader("👥 Sex (M / F) in selected SE")
         if points_gdf is not None and {"Masculin","Feminin"}.issubset(points_gdf.columns):
             gdf_idse_simple = gdf_idse.explode(ignore_index=True)
             pts_inside = safe_sjoin(points_gdf, gdf_idse_simple, predicate="intersects")
-            if not pts_inside.empty:
-                m_total = int(pts_inside["Masculin"].sum())
-                f_total = int(pts_inside["Feminin"].sum())
-            else:
-                m_total, f_total = 0,0
-            st.markdown(f"- 👨 **M**: {m_total}  \n- 👩 **F**: {f_total}  \n- 👥 **Total**: {m_total+f_total}")
+            m_total = int(pts_inside["Masculin"].sum()) if not pts_inside.empty else 0
+            f_total = int(pts_inside["Feminin"].sum()) if not pts_inside.empty else 0
+
+            st.markdown(f"- 👨 **M**: {m_total}\n- 👩 **F**: {f_total}\n- 👥 **Total**: {m_total+f_total}")
+
             fig, ax = plt.subplots(figsize=(3,3))
-            if m_total + f_total > 0:
-                ax.pie([m_total,f_total], labels=["M","F"], autopct="%1.1f%%", startangle=90, colors=["#1f77b4","#ff7f0e"])
-            else:
-                ax.pie([1], labels=["No data"], colors=["lightgrey"])
+            ax.pie([m_total,f_total] if m_total+f_total>0 else [1],
+                   labels=["M","F"] if m_total+f_total>0 else ["No data"],
+                   autopct="%1.1f%%" if m_total+f_total>0 else None)
             ax.axis("equal")
             st.pyplot(fig)
 
