@@ -175,7 +175,7 @@ minx, miny, maxx, maxy = gdf_idse.total_bounds
 m = folium.Map(location=[(miny+maxy)/2, (minx+maxx)/2], zoom_start=18)
 
 # ===== Base layers =====
-folium.TileLayer("OpenStreetMap", name="OpenStreetMap", control=True).add_to(m)
+folium.TileLayer("OpenStreetMap").add_to(m)
 folium.TileLayer(
     tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     name="Satellite",
@@ -332,3 +332,4 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
