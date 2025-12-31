@@ -240,45 +240,31 @@ with col_map:
         use_container_width=True
     )
 
-  # ================================
-# DYNAMIC MARKER TABLE AND CSV (Dynamic lines)
-# ================================
-if "markers_list" not in st.session_state:
-    st.session_state.markers_list = []
+    # ================================
+    # DYNAMIC MARKER TABLE AND CSV
+    # ================================
+    markers_list = []
 
-# Capture new markers from map
-if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-    for feature in map_data["all_drawings"]:
-        geom_type = feature["geometry"]["type"]
-        geom_shape = shape(feature["geometry"])
-        if geom_type == "Point":
-            # Avoid duplicate entries
-            coord = (geom_shape.y, geom_shape.x)
-            if coord not in st.session_state.markers_list:
-                st.session_state.markers_list.append(coord)
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        for feature in map_data["all_drawings"]:
+            geom_type = feature["geometry"]["type"]
+            geom_shape = shape(feature["geometry"])
 
-# Display dynamic table if there are markers
-if st.session_state.markers_list:
-    markers_df = pd.DataFrame(st.session_state.markers_list, columns=["Latitude", "Longitude"])
-    st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
-    st.dataframe(
-        markers_df.style.set_table_styles(
-            [{'selector': 'th', 'props': [('font-size', '10px')]},
-             {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
-        ),
-        height=200,
-        width=300
-    )
+            if geom_type == "Point":
+                markers_list.append((geom_shape.y, geom_shape.x))
 
-    csv = markers_df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download Marker Coordinates CSV",
-        data=csv,
-        file_name="markers_coordinates.csv",
-        mime="text/csv"
-    )
+    if markers_list:
+        markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
+        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+        st.dataframe(markers_df)
 
-
+        csv = markers_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Marker Coordinates CSV",
+            data=csv,
+            file_name="markers_coordinates.csv",
+            mime="text/csv"
+        )
 
     # Polygon-based statistics
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
@@ -286,21 +272,14 @@ if st.session_state.markers_list:
         drawn_polygon = shape(last_feature["geometry"])
         if drawn_polygon is not None and points_gdf is not None:
             pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
-            if len(pts_in_polygon) > 0:
-                st.subheader("🟢 Points inside drawn polygon")
-                st.markdown(f"- Total points: {len(pts_in_polygon)}")
+            st.subheader("🟢 Points inside drawn polygon")
+            st.markdown(f"- Total points: {len(pts_in_polygon)}")
+            if not pts_in_polygon.empty:
                 attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
                 if attr_cols:
                     stats = pts_in_polygon[attr_cols].sum().to_frame().T
                     stats["Total"] = stats.sum(axis=1)
-                    st.dataframe(
-                        stats.style.set_table_styles(
-                            [{'selector': 'th', 'props': [('font-size', '10px')]},
-                             {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
-                        ),
-                        height=100,
-                        width=300
-                    )
+                    st.dataframe(stats)
                 else:
                     st.dataframe(pts_in_polygon)
 
@@ -353,6 +332,3 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
-
-
-
