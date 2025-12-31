@@ -240,37 +240,44 @@ with col_map:
         use_container_width=True
     )
 
-    # ================================
-    # DYNAMIC MARKER TABLE AND CSV
-    # ================================
-    markers_list = []
+  # ================================
+# DYNAMIC MARKER TABLE AND CSV (Dynamic lines)
+# ================================
+if "markers_list" not in st.session_state:
+    st.session_state.markers_list = []
 
-    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
-        for feature in map_data["all_drawings"]:
-            geom_type = feature["geometry"]["type"]
-            geom_shape = shape(feature["geometry"])
-            if geom_type == "Point":
-                markers_list.append((geom_shape.y, geom_shape.x))
+# Capture new markers from map
+if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+    for feature in map_data["all_drawings"]:
+        geom_type = feature["geometry"]["type"]
+        geom_shape = shape(feature["geometry"])
+        if geom_type == "Point":
+            # Avoid duplicate entries
+            coord = (geom_shape.y, geom_shape.x)
+            if coord not in st.session_state.markers_list:
+                st.session_state.markers_list.append(coord)
 
-    if markers_list:
-        markers_df = pd.DataFrame(markers_list, columns=["Latitude", "Longitude"])
-        st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
-        st.dataframe(
-            markers_df.style.set_table_styles(
-                [{'selector': 'th', 'props': [('font-size', '10px')]},
-                 {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
-            ),
-            height=200,
-            width=300
-        )
+# Display dynamic table if there are markers
+if st.session_state.markers_list:
+    markers_df = pd.DataFrame(st.session_state.markers_list, columns=["Latitude", "Longitude"])
+    st.subheader("📍 Drawn Markers Coordinates (Dynamic Table)")
+    st.dataframe(
+        markers_df.style.set_table_styles(
+            [{'selector': 'th', 'props': [('font-size', '10px')]},
+             {'selector': 'td', 'props': [('padding', '2px 4px'), ('font-size', '10px')]}]
+        ),
+        height=200,
+        width=300
+    )
 
-        csv = markers_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Marker Coordinates CSV",
-            data=csv,
-            file_name="markers_coordinates.csv",
-            mime="text/csv"
-        )
+    csv = markers_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download Marker Coordinates CSV",
+        data=csv,
+        file_name="markers_coordinates.csv",
+        mime="text/csv"
+    )
+
 
     # Polygon-based statistics
     if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
@@ -345,3 +352,4 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
