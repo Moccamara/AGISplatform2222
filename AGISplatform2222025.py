@@ -278,6 +278,25 @@ with col_map:
         )
 
 with col_chart:
+
+    # Polygon-based statistics
+    if map_data and "all_drawings" in map_data and map_data["all_drawings"]:
+        last_feature = map_data["all_drawings"][-1]
+        drawn_polygon = shape(last_feature["geometry"])
+        if drawn_polygon is not None and points_gdf is not None:
+            pts_in_polygon = points_gdf[points_gdf.geometry.within(drawn_polygon)]
+            st.subheader("🟢 Points inside drawn polygon")
+            st.markdown(f"- Total points: {len(pts_in_polygon)}")
+            if not pts_in_polygon.empty:
+                attr_cols = [c for c in ["Masculin","Feminin"] if c in pts_in_polygon.columns]
+                if attr_cols:
+                    stats = pts_in_polygon[attr_cols].sum().to_frame().T
+                    stats["Total"] = stats.sum(axis=1)
+                    st.dataframe(stats)
+                else:
+                    st.dataframe(pts_in_polygon)
+
+with col_chart:
     # Population bar chart
     if idse_selected=="No filter":
         st.info("Select SE.")
@@ -328,3 +347,4 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
