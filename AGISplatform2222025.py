@@ -293,7 +293,7 @@ with col_chart:
         df_long["idse_new"] = df_long["idse_new"].astype(str)
         df_long = df_long.melt(id_vars="idse_new", value_vars=["pop_se","pop_se_ct"],
                                var_name="Variable", value_name="Population")
-        df_long["Variable"] = df_long["Variable"].replace({"pop_se":"Pop SE","pop_se_ct":"Pop Actu"})
+        df_long["Variable"] = df_long["Variable"].replace({"pop_se":"Pop Ref","pop_se_ct":"Pop Current"})
         chart = (alt.Chart(df_long)
                  .mark_bar()
                  .encode(x=alt.X("idse_new:N", title=None, axis=alt.Axis(labelAngle=0)),
@@ -332,4 +332,5 @@ st.markdown("""
 **Geospatial Enterprise Web Mapping** Developed with Streamlit, Folium & GeoPandas  
 **Dr. CAMARA MOC, PhD – Geomatics Engineering** © 2025
 """)
+
 
